@@ -32,6 +32,10 @@ func main() {
 	var app *fiber.App
 	app = fiber.New()
 
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("hello world")
+	})
+
 	api := app.Group("/v1", compress.New())
 
 	router.NewTransactionRouter(context.TODO(), api)

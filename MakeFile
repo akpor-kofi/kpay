@@ -1,0 +1,5 @@
+build:
+	env GOOS=linux go build -ldflags="-s -w" -o bin/main ./cmd/prod_main.go
+
+deploy_prod: build
+	serverless deploy --aws-profile fds1

@@ -1,0 +1,8 @@
+.serverless
+serverless.yml
+
+bin/
+cmd/prod_main.go
+
+.idea
+.DS_Store

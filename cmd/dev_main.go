@@ -12,6 +12,7 @@ import (
 
 func main() {
 	//mongoUrl := os.Getenv("MONGO_URL")
+	log.Printf("print here first")
 
 	err := mgm.SetDefaultConfig(nil, "fraudis_dev", options.Client().ApplyURI("mongodb://localhost:27018"))
 	if err != nil {

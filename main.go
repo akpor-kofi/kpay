@@ -2,21 +2,28 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"fraud-detect-system/api/router"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
+	"github.com/joho/godotenv"
 	"github.com/kamva/mgm/v3"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
+	"os"
 )
 
 func main() {
-	//mongoUrl := os.Getenv("MONGO_URL")
-	log.Printf("print here first")
-
-	err := mgm.SetDefaultConfig(nil, "fraudis_dev", options.Client().ApplyURI("mongodb://localhost:27018"))
+	err := godotenv.Load()
 	if err != nil {
-		panic(err)
+		fmt.Println("no .env file found")
+		fmt.Println("production mode")
+	}
+	mongoUrl := os.Getenv("MONGO_URL")
+
+	err = mgm.SetDefaultConfig(nil, "fraudis_dev", options.Client().ApplyURI(mongoUrl))
+	if err != nil {
+		panic("cannot connect database")
 	}
 
 	// connect app

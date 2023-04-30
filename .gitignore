@@ -4,5 +4,7 @@ serverless.yml
 bin/
 cmd/prod_main.go
 
+.env
+
 .idea
 .DS_Store

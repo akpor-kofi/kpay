@@ -2,6 +2,7 @@ package clustering
 
 import (
 	"fraud-detect-system/domain"
+	"fraud-detect-system/domain/markov"
 	"fraud-detect-system/domain/ports"
 	"github.com/gofiber/fiber/v2"
 	"github.com/muesli/clusters"
@@ -16,7 +17,7 @@ var (
 func ClusterTransactions(account domain.Account, transactionRepository ports.TransactionRepository, accountRepository ports.AccountRepository) error {
 	// need to get amounts []float64
 
-	transactions, err := transactionRepository.GetAllWhereAccountIs(account.CardNum)
+	transactions, err := transactionRepository.GetAllValidTransactionWhereAccountIs(account.CardNum)
 	if err != nil {
 		return err
 	}
@@ -27,7 +28,7 @@ func ClusterTransactions(account domain.Account, transactionRepository ports.Tra
 
 	var d clusters.Observations
 
-	for _, amount := range transform(transactions[:len(transactions)-10]) {
+	for _, amount := range transform(transactions[:len(transactions)-markov.NumOfObservations]) {
 		d = append(d, clusters.Coordinates{
 			amount,
 			1.0, // till i find what else to weigh against amount

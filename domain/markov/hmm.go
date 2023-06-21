@@ -7,17 +7,19 @@ import (
 	"time"
 )
 
-const halfLine = 0.7
+const fraudThreshold = 0.4
 
 const (
 	NumStates              = 2
 	NumOfObservableSymbols = 3
-	MaxIters               = 100
+	//NumOfObservations = 10
+	NumOfObservations = 10
+	MaxIters          = 100
 )
 
 const (
-	fraud = iota
-	notFraud
+	notFraud = iota
+	fraud
 )
 
 const (
@@ -289,11 +291,15 @@ func (h *HMM) next(iter *int) bool {
 	}
 }
 
-func (h *HMM) DetectFraud(obs []int) (bool, float64) {
+func (h *HMM) DetectFraud(obs []int) (isFraud bool, maxProb float64, avgLikelihood float64) {
 	viterbiSeq, _ := h.viterbi(obs)
 
-	// calculate the percentage of the seq that are 0, if more than 50% (0.50) likely fraud
-	total := len(obs)
+	fmt.Println("obs: ", obs)
+	fmt.Println("viberti sequence: ", viterbiSeq)
+
+	T := len(viterbiSeq)
+
+	// calculate the percentage of the seq that are 1, if more than 50% (0.50) likely fraud
 
 	numOfFraudState := 0
 	for _, o := range viterbiSeq {
@@ -302,14 +308,23 @@ func (h *HMM) DetectFraud(obs []int) (bool, float64) {
 		}
 	}
 
-	prob := float64(numOfFraudState) / float64(total)
+	p := float64(numOfFraudState) / float64(T)
 
-	if prob >= halfLine {
-		return true, prob
+	if viterbiSeq[T-1] == 1 {
+		isFraud = true
 	} else {
-		return false, prob
+		isFraud = false
 	}
+
+	maxProb = h.LogLikelihood(viterbiSeq)
+
+	avgLikelihood = p
+
+	fmt.Println("*** ", h.LogLikelihood(viterbiSeq))
+
+	return
 }
+
 func (h *HMM) viterbi(obs []int) ([]int, float64) {
 	T := len(obs)
 	delta := make([][]float64, T)
@@ -360,4 +375,73 @@ func (h *HMM) viterbi(obs []int) ([]int, float64) {
 
 	return stateSeq, math.Exp(maxProb)
 
+}
+
+func (h *HMM) LogLikelihood(x []int) float64 {
+	// Returns log P(x | model)
+	// using the forward part of the forward-backward algorithm
+	T := len(x)
+	scale := make([]float64, T)
+	alpha := make([][]float64, T)
+	for i := range alpha {
+		alpha[i] = make([]float64, h.M)
+	}
+	alpha[0] = elementWiseMultiply(h.Pi, getColumn(h.B, x[0]))
+	scale[0] = sum(alpha[0])
+	alpha[0] = elementWiseDivide(alpha[0], scale[0])
+	for t := 1; t < T; t++ {
+		alphaTPrime := dotProduct(alpha[t-1], h.A)
+		for i := range alphaTPrime {
+			alphaTPrime[i] *= h.B[i][x[t]]
+		}
+		scale[t] = sum(alphaTPrime)
+		alpha[t] = elementWiseDivide(alphaTPrime, scale[t])
+	}
+	return math.Log(sum(scale))
+}
+
+// Helper functions
+
+func elementWiseMultiply(a, b []float64) []float64 {
+	result := make([]float64, len(a))
+	for i := range a {
+		result[i] = a[i] * b[i]
+	}
+	return result
+}
+
+func elementWiseDivide(a []float64, b float64) []float64 {
+	result := make([]float64, len(a))
+	for i := range a {
+		result[i] = a[i] / b
+	}
+	return result
+}
+
+func dotProduct(a []float64, b [][]float64) []float64 {
+	result := make([]float64, len(b[0]))
+	for i := range b[0] {
+		sum := 0.0
+		for j := range a {
+			sum += a[j] * b[j][i]
+		}
+		result[i] = sum
+	}
+	return result
+}
+
+func sum(values []float64) float64 {
+	sum := 0.0
+	for _, value := range values {
+		sum += value
+	}
+	return sum
+}
+
+func getColumn(matrix [][]float64, columnIndex int) []float64 {
+	column := make([]float64, len(matrix))
+	for i := range matrix {
+		column[i] = matrix[i][columnIndex]
+	}
+	return column
 }

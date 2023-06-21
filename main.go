@@ -22,7 +22,7 @@ func main() {
 	mode := os.Getenv("FIBER_ENV")
 	mongoUrl := os.Getenv("MONGO_URL")
 	railwayPort := os.Getenv("PORT")
-	fmt.Println(railwayPort)
+	fmt.Println(mongoUrl)
 
 	err = mgm.SetDefaultConfig(nil, "fraudis_dev", options.Client().ApplyURI(mongoUrl))
 	if err != nil {
@@ -44,8 +44,14 @@ func main() {
 	router.NewTransactionRouter(context.TODO(), api)
 	router.NewMerchantRouter(context.TODO(), api)
 
+	err = app.Listen(":3002")
+
+	if err != nil {
+		panic(err)
+	}
+
 	if mode == "DEV" {
-		err = app.Listen(":3000")
+		err = app.Listen(":3002")
 	} else {
 		err = app.Listen("0.0.0.0:" + railwayPort)
 	}

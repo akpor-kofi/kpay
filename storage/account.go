@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fraud-detect-system/domain"
-	"fraud-detect-system/markov"
 	"github.com/kamva/mgm/v3"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -32,9 +31,6 @@ func (a *AccountStorage) Get(creditCard string) (domain.Account, error) {
 }
 
 func (a *AccountStorage) Create(account domain.Account) (domain.Account, error) {
-	// initialize HMM
-	account.HMM = *markov.New(markov.NumStates, markov.NumOfObservableSymbols, markov.MaxIters)
-
 	err := a.collection.CreateWithCtx(a.context, &account)
 	if err != nil {
 		return domain.Account{}, err

@@ -5,6 +5,7 @@ bin/
 cmd/prod_main.go
 
 .env
+fraud-detect-system.exe
 
 .idea
 .DS_Store

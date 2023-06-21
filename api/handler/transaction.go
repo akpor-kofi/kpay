@@ -3,13 +3,14 @@ package handler
 import (
 	"context"
 	"fmt"
-	"fraud-detect-system/clustering"
 	"fraud-detect-system/domain"
 	"fraud-detect-system/domain/ports"
-	"github.com/e-XpertSolutions/go-iforest/v2/iforest"
+	"fraud-detect-system/services/feature_extraction_srv"
+	"fraud-detect-system/services/fraud_detector_srv"
+	"fraud-detect-system/services/transaction_srv"
 	"github.com/go-playground/validator"
 	"github.com/gofiber/fiber/v2"
-	"go.mongodb.org/mongo-driver/mongo"
+	"strings"
 )
 
 type PaymentJSON struct {
@@ -18,7 +19,7 @@ type PaymentJSON struct {
 	ExpiryMonth int     `json:"expiry_month" validate:"required"`
 	ExpiryYear  int     `json:"expiry_year" validate:"required"`
 	Cvc         string  `json:"cvc" validate:"required"`
-	CreditCard  string  `json:"credit_card" validate:"required,credit_card"`
+	CreditCard  string  `json:"credit_card" validate:"required"`
 	IPAddress   string  `json:"ip_address"`
 	domain.User
 	Merchant string `json:"merchant" validate:"required"`
@@ -33,6 +34,11 @@ type ErrorResponse struct {
 type TransactionHandler struct {
 	transactionRepo ports.TransactionRepository
 	accountRepo     ports.AccountRepository
+
+	transactionsService  transaction_srv.TransactionService
+	fraudDetectorService fraud_detector_srv.FraudDetectorService
+
+	mailer ports.IMailer
 
 	ctx context.Context
 }
@@ -54,51 +60,27 @@ func validatePaymentJSON(payment PaymentJSON) []*ErrorResponse {
 	return errors
 }
 
-func NewTransactionHandler(ctx context.Context, repo1 ports.TransactionRepository, repo2 ports.AccountRepository) *TransactionHandler {
+func NewTransactionHandler(ctx context.Context, repo1 ports.TransactionRepository, repo2 ports.AccountRepository, transactionsService transaction_srv.TransactionService, fraudDetectorService fraud_detector_srv.FraudDetectorService, mailer ports.IMailer) *TransactionHandler {
 	return &TransactionHandler{
 		transactionRepo: repo1,
 		accountRepo:     repo2,
+
+		transactionsService:  transactionsService,
+		fraudDetectorService: fraudDetectorService,
+
+		mailer: mailer,
 
 		ctx: ctx,
 	}
 }
 
-func (th *TransactionHandler) Add(c *fiber.Ctx) error {
-	payment := c.UserContext().Value("payment").(PaymentJSON)
+func (th *TransactionHandler) AddTransaction(c *fiber.Ctx) error {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered. Error:\n", r)
+		}
+	}()
 
-	newTransaction := domain.Transaction{
-		Amt:        payment.Amount,
-		CreditCard: payment.CreditCard,
-		//Ip:         c.GetReqHeaders()["X-Forwarded-For"],
-		//UserAgent:  c.GetReqHeaders()["User-Agent"],
-		Ip:        c.IP(),
-		UserAgent: string(c.Context().UserAgent()),
-		Merchant:  payment.Merchant,
-		User: domain.User{
-			Name:  payment.Name,
-			Email: payment.Email,
-			Phone: payment.Phone,
-		},
-	}
-
-	_, err := th.transactionRepo.Add(newTransaction)
-	if err != nil {
-		return err
-	}
-
-	transactions, err := th.transactionRepo.GetAllWhereAccountIs(payment.CreditCard)
-	if err != nil {
-		return err
-	}
-
-	child := context.WithValue(c.UserContext(), "transactions", transactions)
-	c.SetUserContext(child)
-
-	return c.Next()
-
-}
-
-func (th *TransactionHandler) GetAccount(c *fiber.Ctx) error {
 	var payment PaymentJSON
 	if err := c.BodyParser(&payment); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
@@ -107,26 +89,20 @@ func (th *TransactionHandler) GetAccount(c *fiber.Ctx) error {
 	errors := validatePaymentJSON(payment)
 	if errors != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(errors)
-
 	}
 
-	account, err := th.accountRepo.Get(payment.CreditCard)
+	account, err := th.transactionsService.GetAccountByCreditCard(payment.CreditCard)
 
 	// creates an account if it doesn't exist
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
+		if err == transaction_srv.ErrNoAccountFound {
 			// create the account
 			newAccount := domain.Account{
-				Merchant:   payment.Merchant,
-				IPAddress:  c.GetReqHeaders()["X-Forwarded-For"],
 				CardHolder: payment.CardHolder,
 				CardNum:    payment.CreditCard,
 			}
 
-			newAccount, err = th.accountRepo.Create(newAccount)
-			if err != nil {
-				return err
-			}
+			newAccount, _ = th.transactionsService.CreateAccount(newAccount)
 
 			account = newAccount
 		} else {
@@ -134,133 +110,81 @@ func (th *TransactionHandler) GetAccount(c *fiber.Ctx) error {
 		}
 	}
 
-	parent := c.UserContext()
-	accountCtx := context.WithValue(parent, "account", account)
-	accountCtx = context.WithValue(accountCtx, "payment", payment)
+	// add the transaction
+	//TODO: verify merchant
 
-	c.SetUserContext(accountCtx)
-	return c.Next()
-}
+	newTransaction := domain.Transaction{
+		Amt:        payment.Amount,
+		CreditCard: payment.CreditCard,
+		Ip:         strings.Split(c.GetReqHeaders()["X-Forwarded-For"], ",")[0],
+		//Ip:         c.GetReqHeaders()["X-Forwarded-For"],
+		UserAgent: c.GetReqHeaders()["User-Agent"],
+		//Ip:        c.IP(),
+		//UserAgent: string(c.Context().UserAgent()),
+		Merchant: payment.Merchant,
+		User: domain.User{
+			Email: payment.Email,
+		},
+	}
 
-func (th *TransactionHandler) ClusterAccountTransactions(c *fiber.Ctx) error {
-	account := c.UserContext().Value("account").(domain.Account)
-
-	// --> Get clusters
-	err := clustering.ClusterTransactions(account, th.transactionRepo, th.accountRepo)
+	newTransaction, err = th.transactionsService.Create(newTransaction)
 	if err != nil {
 		return err
 	}
 
-	return c.Next()
-}
-
-func (th *TransactionHandler) TrainAccountModel(c *fiber.Ctx) error {
-	account := c.UserContext().Value("account").(domain.Account)
-
-	//--> train the model by feeding it observations of transactions
-	transactions := c.UserContext().Value("transactions").([]domain.Transaction)
-
-	var amts []float64
-	var obs []int
-
-	amts = transform(transactions[len(transactions)-10:])
-
-	// TODO: should make a function that pads the array if len(amts) < 10
-
-	obs = classifyHabits(account, amts)
-	account.Fit(obs)
-	// --> save the trained model
-	err := th.accountRepo.Save(&account)
+	transactions, err := th.transactionsService.GetAllValidByCreditCard(payment.CreditCard)
 	if err != nil {
 		return err
 	}
 
-	child := context.WithValue(c.UserContext(), "obs", obs)
-	c.SetUserContext(child)
-
-	return c.Next()
-}
-
-// TrainIForest background job
-func (th *TransactionHandler) TrainIForest(c *fiber.Ctx) error {
-	//--> train the model by feeding it observations of transactions
-	transactions := c.UserContext().Value("transactions").([]domain.Transaction)
-
-	fmt.Println(len(transactions))
-
-	inputData := th.preprocess(transactions)
-
-	fmt.Println(inputData)
-
-	treesNumber := 100
-	subsampleSize := 256
-	outliersRatio := 0.04 //0.01
-	routinesNumber := 10
-
-	//model initialization
-	forest := iforest.NewForest(treesNumber, subsampleSize, outliersRatio)
-
-	//training stage - creating trees
-	forest.Train(inputData)
-
-	err := forest.TestParallel(inputData, routinesNumber)
+	features := th.extractFeatures(newTransaction)
+	xgbPred, err := th.fraudDetectorService.DetectXGB(features)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	threshold := forest.AnomalyBound
-	anomalyScores := forest.AnomalyScores
-	labelsTest := forest.Labels
+	if len(transactions) < 20 {
+		if xgbPred.Probability[1] >= 0.2 {
+			newTransaction.IsFraud = true
+		}
 
-	labelMap := map[int]int{}
+		newTransaction.RiskScore = xgbPred.Probability[1]
 
-	for i, label := range labelsTest {
-		labelMap[i] = label
+		th.transactionRepo.Save(&newTransaction)
+		return c.JSON(xgbPred)
 	}
 
-	return c.JSON(fiber.Map{
-		"threshold":      threshold,
-		"anomaly_scores": anomalyScores,
-		"labels_test":    labelMap,
-	})
-}
+	hmmPred, err := th.fraudDetectorService.DetectHMM(&account)
 
-func (th *TransactionHandler) DetectFraud(c *fiber.Ctx) error {
-	account := c.UserContext().Value("account").(domain.Account)
-	obs := c.UserContext().Value("obs").([]int)
+	finalPred := th.fraudDetectorService.Ensemble(hmmPred, xgbPred)
 
-	// --> detect fraud
-	//if isFraud, _ := account.DetectFraud(obs); isFraud {
-	//	// --> probably send an info to the merchant to investigate this account
+	if finalPred.Likelihood >= 0.7 || finalPred.Prob >= 0.2 || finalPred.IsHmmFraud {
+		// probably fraud
+
+		newTransaction.IsFraud = true
+
+	}
+
+	newTransaction.RiskScore = finalPred.Prob
+
+	th.transactionRepo.Save(&newTransaction)
+
+	//	_ = th.mailer.Send(domain.Mail{
+	//		To:      "akporkofi11@gmail.com",
+	//		Subject: "answer me",
+	//		Message: `To: kate.doe@example.com
 	//
-	//	// --> set the transaction as fraudulent
+	//From: john.doe@your.domain
+	//
+	//Subject: Why aren’t you using Mailtrap yet?
+	//
+	//Here’s the space for your great sales pitch`,
+	//	})
+	//if err != nil {
+	//	return err
 	//}
 
-	isFraud, fraudProb := account.DetectFraud(obs)
-
-	// 1) update transaction risk score
-	transactions, err := th.transactionRepo.GetAllWhereAccountIs(account.CardNum)
-	if err != nil {
-		return err
-	}
-
-	// 2) get last transaction and update risk_score and is_fraud
-	currTransaction := transactions[len(transactions)-1]
-
-	currTransaction.RiskScore = fraudProb
-	currTransaction.IsFraud = isFraud
-
-	err = th.transactionRepo.Save(&currTransaction)
-	if err != nil {
-		return err
-	}
-
-	// --> Process purchase
-
-	return c.Status(200).JSON(fiber.Map{
-		"is_fraud":   isFraud,
-		"fraud_prob": fraudProb,
-	})
+	return c.Status(200).JSON(th.fraudDetectorService.Ensemble(hmmPred, xgbPred))
 }
 
 func (th *TransactionHandler) GetAll(c *fiber.Ctx) error {
@@ -276,154 +200,38 @@ func (th *TransactionHandler) GetAll(c *fiber.Ctx) error {
 	return c.JSON(transactions)
 }
 
-func (th *TransactionHandler) preprocess(transactions []domain.Transaction) [][]float64 {
-	inputData := make([][]float64, len(transactions))
-	allTransactions, _ := th.transactionRepo.GetAll()
+func (th *TransactionHandler) extractFeatures(currentTransaction domain.Transaction) fraud_detector_srv.XGBFeatures {
+	var xgb fraud_detector_srv.XGBFeatures
 
-	// merchant
-	var evaluateMerchant = func(transaction domain.Transaction, pos int) float64 {
-		for _, tx := range transactions[:pos] {
-			if transaction.Merchant == tx.Merchant {
-				return 1
-			}
-		}
+	extractionService := feature_extraction_srv.New(th.transactionRepo)
 
-		for _, tx := range allTransactions {
-			if tx.DefaultModel.CreatedAt.After(transaction.DefaultModel.CreatedAt) {
-				break
-			}
-			if transaction.Merchant == tx.Merchant {
-				return 0
-			}
-		}
+	xgb.Hour = extractionService.ExtractHour(currentTransaction)
+	xgb.TravelSpeed = extractionService.ExtractTravelSpeed(currentTransaction)
+	xgb.LastDayTransactionCount, xgb.LastDayFraudTransactionCount = extractionService.ExtractLast24HourCount(currentTransaction)
+	xgb.Amount = currentTransaction.Amt
+	xgb.CategoryIndex = 0
 
-		return -1
-	}
-
-	var evaluateIp = func(transaction domain.Transaction, pos int) float64 {
-		for _, tx := range transactions[:pos] {
-			if transaction.Ip == tx.Ip {
-				return 1
-			}
-		}
-
-		for _, tx := range allTransactions {
-			if tx.DefaultModel.CreatedAt.After(transaction.DefaultModel.CreatedAt) {
-				break
-			}
-			if transaction.Ip == tx.Ip {
-				return 0
-			}
-		}
-
-		return -1
-	}
-
-	var evaluateEmail = func(transaction domain.Transaction, pos int) float64 {
-		for _, tx := range transactions[:pos] {
-			if transaction.Email == tx.Email {
-				return 1
-			}
-		}
-
-		for _, tx := range allTransactions {
-			if tx.DefaultModel.CreatedAt.After(transaction.DefaultModel.CreatedAt) {
-				break
-			}
-			if transaction.Email == tx.Email {
-				return 0
-			}
-		}
-
-		return -1
-	}
-
-	var evaluateName = func(transaction domain.Transaction, pos int) float64 {
-		for _, tx := range transactions[:pos] {
-			if transaction.Name == tx.Name {
-				return 1
-			}
-		}
-
-		for _, tx := range allTransactions {
-			if tx.DefaultModel.CreatedAt.After(transaction.DefaultModel.CreatedAt) {
-				break
-			}
-			if transaction.Name == tx.Name {
-				return 0
-			}
-		}
-
-		return -1
-	}
-
-	var evaluateUserAgent = func(transaction domain.Transaction, pos int) float64 {
-		for _, tx := range transactions[:pos] {
-			if transaction.UserAgent == tx.UserAgent {
-				return 1
-			}
-		}
-
-		return -1
-	}
-
-	var evaluatePhone = func(transaction domain.Transaction, pos int) float64 {
-		for _, tx := range transactions[:pos] {
-			if transaction.Phone == tx.Phone {
-				return 1
-			}
-		}
-
-		for _, tx := range allTransactions {
-			if tx.DefaultModel.CreatedAt.After(transaction.DefaultModel.CreatedAt) {
-				break
-			}
-			if transaction.Phone == tx.Phone {
-				return 0
-			}
-		}
-
-		return -1
-	}
-
-	for i, transaction := range transactions {
-		fmt.Println(transaction.Email)
-		var rowData []float64
-		rowData = append(rowData, evaluateMerchant(transaction, i))
-		rowData = append(rowData, evaluateEmail(transaction, i))
-		rowData = append(rowData, evaluateIp(transaction, i))
-		rowData = append(rowData, evaluateUserAgent(transaction, i))
-		rowData = append(rowData, evaluateName(transaction, i))
-		rowData = append(rowData, evaluatePhone(transaction, i))
-
-		inputData[i] = rowData
-	}
-	// merchant
-	// email
-	// ip address
-	// user agent
-	// name
-	// phone
-
-	// 1 - if it's the same one the user has been using
-	// 0 - if it's not the same but is in the kofipay network in some other transaction
-	// -1 - if it's not the same and if it's not in the network at all
-
-	return inputData
+	return xgb
 }
 
-func transform(txs []domain.Transaction) (amounts []float64) {
-	for _, tx := range txs {
-		amounts = append(amounts, tx.Amt)
-	}
-	return
+type Initiator struct {
+	SecretKey       string  `json:"secret_key"`
+	Email           string  `json:"email"` // or just username
+	Amount          float64 `json:"amount"`
+	ProductMetadata string  `json:"product_metadata"` // json blob of product metadata
+	MerchantId      string  `json:"merchant_id"`
 }
 
-func classifyHabits(account domain.Account, amounts []float64) (obs []int) {
-	for _, amount := range amounts {
-		o := account.ClassifyTransaction(amount)
-		obs = append(obs, o)
-	}
+func (th *TransactionHandler) InitializeTransaction(c *fiber.Ctx) error {
+	// parse json to Initiator struct
 
-	return
+	// verify merchant id and secret_key
+
+	// generate a reference that links to transaction id for a specified time
+
+	// initialize transaction
+
+	// return a link that the user can use to pay and reference id
+
+	return nil
 }

@@ -19,7 +19,7 @@ func main() {
 		fmt.Println("no .env file found")
 		fmt.Println("production mode")
 	}
-	mode := os.Getenv("FIBER_ENV")
+	//mode := os.Getenv("FIBER_ENV")
 	mongoUrl := os.Getenv("MONGO_URL")
 	railwayPort := os.Getenv("PORT")
 	fmt.Println(mongoUrl)
@@ -50,11 +50,11 @@ func main() {
 		panic(err)
 	}
 
-	if mode == "DEV" {
-		err = app.Listen(":3002")
-	} else {
-		err = app.Listen("0.0.0.0:" + railwayPort)
-	}
+	//if mode == "DEV" {
+	//	err = app.Listen(":3002")
+	//} else {
+	err = app.Listen("0.0.0.0:" + railwayPort)
+	//}
 
 	if err != nil {
 		panic(err)

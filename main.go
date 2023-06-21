@@ -44,11 +44,11 @@ func main() {
 	router.NewTransactionRouter(context.TODO(), api)
 	router.NewMerchantRouter(context.TODO(), api)
 
-	err = app.Listen(":3002")
-
-	if err != nil {
-		panic(err)
-	}
+	//err = app.Listen(":3002")
+	//
+	//if err != nil {
+	//	panic(err)
+	//}
 
 	//if mode == "DEV" {
 	//	err = app.Listen(":3002")

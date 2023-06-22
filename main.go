@@ -23,6 +23,7 @@ func main() {
 	mongoUrl := os.Getenv("MONGO_URL")
 	railwayPort := os.Getenv("PORT")
 	fmt.Println(mongoUrl)
+	fmt.Println(railwayPort)
 
 	err = mgm.SetDefaultConfig(nil, "fraudis_dev", options.Client().ApplyURI(mongoUrl))
 	if err != nil {

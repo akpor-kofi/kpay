@@ -3,7 +3,6 @@ package token
 import (
 	"fmt"
 	"github.com/gofiber/fiber/v2"
-	"strings"
 	"time"
 )
 
@@ -26,7 +25,7 @@ func NewSession(c *fiber.Ctx, p *Payload, refreshToken string) *Session {
 		Email:        p.Email,
 		RefreshToken: refreshToken,
 		//ClientIp:     c.IP(),
-		ClientIp:  strings.Split(c.GetReqHeaders()["X-Forwarded-For"], ",")[0],
+		ClientIp:  c.GetReqHeaders()["X-Forwarded-For"],
 		IsBlocked: false,
 		UserAgent: fiber.AcquireAgent().Name,
 		CreatedAt: time.Now(),

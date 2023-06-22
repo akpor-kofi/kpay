@@ -27,7 +27,10 @@ func NewTransactionRouter(ctx context.Context, router fiber.Router) {
 
 	th := handler.NewTransactionHandler(ctx, transactionStorage, accountStorage, *transactionService, *fraudDetectorService, m)
 
-	router.Use(cors.New())
+	router.Use(cors.New(cors.Config{
+		AllowMethods: "GET,POST",
+		AllowHeaders: "allow",
+	}))
 
 	router.Post("/initialize", th.InitializeTransaction)
 

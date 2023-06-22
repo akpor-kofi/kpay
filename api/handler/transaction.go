@@ -10,7 +10,6 @@ import (
 	"fraud-detect-system/services/transaction_srv"
 	"github.com/go-playground/validator"
 	"github.com/gofiber/fiber/v2"
-	"strings"
 )
 
 type PaymentJSON struct {
@@ -81,6 +80,8 @@ func (th *TransactionHandler) AddTransaction(c *fiber.Ctx) error {
 		}
 	}()
 
+	fmt.Println(c.GetReqHeaders()["allow"])
+
 	var payment PaymentJSON
 	if err := c.BodyParser(&payment); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
@@ -116,8 +117,8 @@ func (th *TransactionHandler) AddTransaction(c *fiber.Ctx) error {
 	newTransaction := domain.Transaction{
 		Amt:        payment.Amount,
 		CreditCard: payment.CreditCard,
-		Ip:         strings.Split(c.GetReqHeaders()["X-Forwarded-For"], ",")[0],
-		//Ip:         c.GetReqHeaders()["X-Forwarded-For"],
+		//Ip:         strings.Split(c.GetReqHeaders()["X-Forwarded-For"], ",")[0],
+		Ip:        c.GetReqHeaders()["X-Forwarded-For"],
 		UserAgent: c.GetReqHeaders()["User-Agent"],
 		//Ip:        c.IP(),
 		//UserAgent: string(c.Context().UserAgent()),
